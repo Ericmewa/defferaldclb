@@ -1,0 +1,11 @@
+// POST    /api/customers/search
+// POST    /api/deferrals
+// PUT     /api/deferrals/:id/facilities
+// POST    /api/deferrals/:id/documents
+// DELETE  /api/deferrals/:id/documents/:docId
+// PUT     /api/deferrals/:id/approvers
+// PUT     /api/deferrals/:id/approve
+// PUT     /api/deferrals/:id/reject
+// GET     /api/deferrals/pending
+// GET     /api/deferrals/:id
+// GET     /api/deferrals/:id/pdf

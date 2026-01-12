@@ -1,0 +1,14 @@
+namespace MyApi.Constants;
+
+public static class ChecklistStatus
+{
+    public const string Created = "created";                     // just created by co-creator
+    public const string PendingRm = "pending_rm";                // sent to RM
+    public const string RmUploading = "rm_uploading";            // RM is uploading files
+    public const string ReturnedByRm = "returned_by_rm";         // RM returned to co-creator to fix
+    public const string PendingCoCreatorReview = "pending_cocreator_review"; // co-creator validating uploads
+    public const string PendingChecker = "pending_checker";      // sent to co-checker
+    public const string Completed = "completed";                 // final
+    public const string Active = "active";                       // generic active bucket
+}
+  
