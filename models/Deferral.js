@@ -103,7 +103,7 @@ const deferralSchema = new mongoose.Schema(
 
     status: {
       type: String,
-      enum: ["pending_approval", "in_review", "approved", "rejected"],
+      enum: ["pending_approval", "in_review", "approved", "rejected", "returned_for_rework"],
       default: "pending_approval",
     },
 
@@ -118,6 +118,30 @@ const deferralSchema = new mongoose.Schema(
     rejectedDate: Date,
 
     rejectionReason: String,
+
+    // Return for rework metadata
+    reworkRequestedBy: String,
+    reworkRequestedById: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    reworkRequestedDate: Date,
+    reworkComments: String,
+    approverComments: String,
+
+    // CO Creator and CO Checker references
+    creator: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+    checker: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
+    // Three-stage approval status
+    allApproversApproved: { type: Boolean, default: false },
+    creatorApprovalStatus: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
+    creatorApprovalDate: Date,
+    creatorApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
+    checkerApprovalStatus: { type: String, enum: ["pending", "approved", "rejected"], default: "pending" },
+    checkerApprovalDate: Date,
+    checkerApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
+
+    // SLA tracking
+    slaExpiry: Date,
 
     requestor: {
       type: mongoose.Schema.Types.ObjectId,

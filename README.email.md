@@ -23,6 +23,7 @@ For Gmail accounts, you should create an App Password (recommended) or configure
 
 - On deferral creation: the first approver (if email available) receives an email with a link to the **login** page which redirects to the approver view.
 - On each approval: the next approver receives an email with a login link that redirects to the approver view; when approvals complete, a final notification is sent to the CO email (if provided) or fallback CO_EMAIL.
+- On rejection: the requestor (RM) will receive an email notifying them of the rejection with the provided reason and a link to view the deferral; an in-app notification is also created for the RM.
 
 ## Testing locally
 

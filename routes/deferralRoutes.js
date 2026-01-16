@@ -14,14 +14,17 @@ import {
   setApprovers,
   removeApprover,
   approveDeferral,
+  approveByCreator,
+  approveByChecker,
   rejectDeferral,
+  returnForRework,
   getApprovedDeferrals,
   generatePDF,
   getNextDeferralNumber,
   seedDeferrals,
   debugGetByNumber,
   debugGetDocumentsByNumber,
-  debugSearchByDocumentName,  debugCreateApproved,  uploadDocument
+  debugSearchByDocumentName,  debugCreateApproved,  uploadDocument, sendReminder
 } from "../controllers/deferralController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
@@ -70,7 +73,10 @@ router.put("/:id/approvers", protect, setApprovers);
 router.delete("/:id/approvers/:index", protect, removeApprover);
 
 router.put("/:id/approve", protect, approveDeferral);
+router.put("/:id/approve-by-creator", protect, approveByCreator);
+router.put("/:id/approve-by-checker", protect, approveByChecker);
 router.put("/:id/reject", protect, rejectDeferral);
+router.put("/:id/return-for-rework", protect, returnForRework);
 
 // Approved deferrals (CO view)
 // (moved earlier to avoid collision with /:id route)

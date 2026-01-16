@@ -2,7 +2,32 @@ import Deferral from "../models/Deferral.js";
 import User from "../models/User.js";
 import PDFDocument from "pdfkit";
 import { sendEmail } from "../services/emailService.js";
-import { deferralSubmissionTemplate, deferralApprovalTemplate, deferralFinalNotification } from "../services/emailTemplates.js";
+import { deferralSubmissionTemplate, deferralApprovalTemplate, deferralFinalNotification, deferralRejectionTemplate, deferralReminderTemplate } from "../services/emailTemplates.js";
+import Notification from "../models/Notification.js";
+
+// Helper function to ensure approval status fields are set on a deferral document
+const ensureApprovalFields = (deferral) => {
+  if (!deferral) return null;
+  
+  const doc = deferral.toObject ? deferral.toObject() : deferral;
+  
+  // Ensure all approval status fields exist with default values
+  if (typeof doc.allApproversApproved === 'undefined' || doc.allApproversApproved === null) {
+    // Check if all approvers have actually approved
+    const allApproved = doc.approvers && Array.isArray(doc.approvers) && doc.approvers.length > 0 && doc.approvers.every(a => a.approved === true);
+    doc.allApproversApproved = allApproved ? true : false;
+  }
+  
+  if (typeof doc.creatorApprovalStatus === 'undefined' || doc.creatorApprovalStatus === null) {
+    doc.creatorApprovalStatus = 'pending';
+  }
+  
+  if (typeof doc.checkerApprovalStatus === 'undefined' || doc.checkerApprovalStatus === null) {
+    doc.checkerApprovalStatus = 'pending';
+  }
+  
+  return doc;
+};
 
 /* CREATE DEFERRAL */
 export const createDeferral = async (req, res) => {
@@ -124,8 +149,14 @@ export const getPendingDeferrals = async (_, res) => {
   const data = await Deferral.find({ status: { $in: ["pending_approval", "in_review"] } })
     .sort("-createdAt")
     .populate("customer", "name customerNumber")
-    .populate("requestor", "name email");
-  res.json(data);
+    .populate("requestor", "name email")
+    .populate("comments.author", "name email role")
+    .populate("creator", "name email role")
+    .populate("checker", "name email role");
+  
+  // Ensure approval fields are set on all deferrals
+  const enrichedData = data.map(d => ensureApprovalFields(d));
+  res.json(enrichedData);
 };
 
 /* GET APPROVER QUEUE - deferrals which are currently awaiting action by the logged-in approver */
@@ -144,9 +175,13 @@ export const getApproverQueue = async (req, res) => {
     .populate("customer", "name customerNumber")
     .populate("requestor", "name email")
     .populate("approvers.user", "name email position")
-    .populate("history.user", "name email");
+    .populate("history.user", "name email role")
+    .populate("creator", "name email role")
+    .populate("checker", "name email role");
 
-  res.json(data);
+  // Ensure approval fields are set
+  const enrichedData = data.map(d => ensureApprovalFields(d));
+  res.json(enrichedData);
 };
 
 
@@ -164,9 +199,13 @@ export const getActionedDeferrals = async (req, res) => {
     .populate('customer', 'name customerNumber')
     .populate('requestor', 'name email')
     .populate('approvers.user', 'name email position')
-    .populate('history.user', 'name email');
+    .populate('history.user', 'name email role')
+    .populate('creator', 'name email role')
+    .populate('checker', 'name email role');
 
-  res.json(data);
+  // Ensure approval fields are set
+  const enrichedData = data.map(d => ensureApprovalFields(d));
+  res.json(enrichedData);
 };
 
 
@@ -174,20 +213,27 @@ export const getActionedDeferrals = async (req, res) => {
 export const getDeferral = async (req, res) => {
   const deferral = await Deferral.findById(req.params.id)
     .populate("customer", "name customerNumber email customerId")
-    .populate("requestor", "name email")
-    .populate("approvers.user", "name email position")
-    .populate("history.user", "name email");
+    .populate("requestor", "name email role")
+    .populate("approvers.user", "name email position role")
+    .populate("history.user", "name email role")
+    .populate("comments.author", "name email role")
+    .populate("creator", "name email role")
+    .populate("checker", "name email role");
   if (!deferral) return res.status(404).json({ message: "Not found" });
-  res.json(deferral);
+  
+  // Ensure approval fields are set
+  const enrichedDeferral = ensureApprovalFields(deferral);
+  res.json(enrichedDeferral);
 };
 
 // DEBUG: Fetch deferral by deferral number for troubleshooting (temporary)
 export const debugGetByNumber = async (req, res) => {
   const deferral = await Deferral.findOne({ deferralNumber: req.params.number })
     .populate("customer", "name customerNumber email customerId")
-    .populate("requestor", "name email")
-    .populate("approvers.user", "name email position")
-    .populate("history.user", "name email");
+    .populate("requestor", "name email role")
+    .populate("approvers.user", "name email position role")
+    .populate("history.user", "name email role")
+    .populate("comments.author", "name email role");
   if (!deferral) return res.status(404).json({ message: "Not found" });
   res.json(deferral);
 };
@@ -323,14 +369,14 @@ export const approveDeferral = async (req, res) => {
   // Debug: log incoming approval attempt
   console.debug('DEBUG approveDeferral called', { method: req.method, url: req.originalUrl, paramsId: req.params.id, userId: req.user && req.user._id, bodyKeys: Object.keys(req.body || {}) });
 
-  const deferral = await Deferral.findById(req.params.id);
+  const deferral = await Deferral.findById(req.params.id).populate('approvers.user', 'name email');
   if (!deferral) {
     console.warn('WARN approveDeferral: deferral not found', { id: req.params.id });
     return res.status(404).json({ message: 'Not found' });
   }
 
   const i = deferral.currentApproverIndex;
-  const currentApproverId = deferral.approvers?.[i]?.user?.toString();
+  const currentApproverId = deferral.approvers?.[i]?.user?._id?.toString() || deferral.approvers?.[i]?.user?.toString();
   if (!currentApproverId || currentApproverId !== req.user._id.toString()) {
     console.warn('WARN approveDeferral: unauthorized approver action', { id: req.params.id, currentApproverId, attemptedBy: req.user._id });
     return res.status(403).json({ message: 'Only the current approver can take this action' });
@@ -362,13 +408,15 @@ export const approveDeferral = async (req, res) => {
     deferral.history.push({ action: 'moved', user: req.user._id, userName: req.user.name, notes: `Moved to next approver`, date: new Date() });
     console.info('Deferral moved to next approver', { id: deferral._id.toString(), newCurrentIndex: deferral.currentApproverIndex });
   } else {
-    deferral.status = "approved";
+    // All approvers have approved
+    deferral.allApproversApproved = true;
+    deferral.status = "in_review"; // Keep as in_review until creator and checker approve
     deferral.approvedBy = req.user.name;
     deferral.approvedById = req.user._id;
     deferral.approvedDate = new Date();
-    deferral.history.push({ action: 'completed', user: req.user._id, userName: req.user.name, notes: `Final approval completed`, date: new Date() });
+    deferral.history.push({ action: 'completed', user: req.user._id, userName: req.user.name, notes: `Final approver approved - awaiting creator and checker approval`, date: new Date() });
     // Debug log for final approval (includes approver id)
-    console.info('Deferral final approved', { id: deferral._id.toString(), deferralNumber: deferral.deferralNumber, approvedBy: deferral.approvedBy, approvedById: deferral.approvedById, approvedDate: deferral.approvedDate });
+    console.info('All approvers approved', { id: deferral._id.toString(), deferralNumber: deferral.deferralNumber, approvedBy: deferral.approvedBy, approvedById: deferral.approvedById, approvedDate: deferral.approvedDate });
   }
 
   // If an approval comment was provided, also persist it as a regular comment so it appears in comment trails
@@ -379,9 +427,9 @@ export const approveDeferral = async (req, res) => {
 
   await deferral.save();
   await deferral.populate("approvers.user", "name email position");
-  await deferral.populate("history.user", "name email");
+  await deferral.populate("history.user", "name email role");
   // Populate comment authors so frontend can display the approver's comment with name/time
-  await deferral.populate("comments.author", "name email");
+  await deferral.populate("comments.author", "name email role");
 
   // Send notification to the next approver or final CO (non-blocking)
   (async () => {
@@ -414,6 +462,148 @@ export const approveDeferral = async (req, res) => {
   res.json(deferral);
 };
 
+/* APPROVE BY CREATOR - Three-stage approval */
+export const approveByCreator = async (req, res) => {
+  try {
+    const deferral = await Deferral.findById(req.params.id)
+      .populate('approvers.user', 'name email role')
+      .populate('creator', 'name email role')
+      .populate('checker', 'name email role');
+    
+    if (!deferral) {
+      return res.status(404).json({ message: 'Deferral not found' });
+    }
+
+    // Verify all approvers have approved before creator can approve
+    if (!deferral.allApproversApproved) {
+      return res.status(400).json({ message: 'All approvers must approve before creator approval' });
+    }
+
+    // Verify user is the creator
+    if (!deferral.creator || deferral.creator._id.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Only the creator can approve' });
+    }
+
+    // Update creator approval status
+    deferral.creatorApprovalStatus = 'approved';
+    deferral.creatorApprovalDate = new Date();
+    deferral.creatorApprovedBy = req.user._id;
+
+    // Add to history
+    const approvalComment = req.body?.comment || '';
+    deferral.history = deferral.history || [];
+    deferral.history.push({
+      action: 'approved',
+      user: req.user._id,
+      userName: req.user.name,
+      notes: `Approved by Creator: ${req.user.name}`,
+      comment: approvalComment || undefined,
+      date: new Date()
+    });
+
+    // Add to comments if comment provided
+    if (approvalComment) {
+      deferral.comments = deferral.comments || [];
+      deferral.comments.push({
+        author: req.user._id,
+        text: approvalComment,
+        createdAt: new Date()
+      });
+    }
+
+    await deferral.save();
+    await deferral.populate('approvers.user', 'name email role');
+    await deferral.populate('history.user', 'name email role');
+    await deferral.populate('comments.author', 'name email role');
+    await deferral.populate('creator', 'name email role');
+    await deferral.populate('checker', 'name email role');
+
+    res.json({
+      success: true,
+      deferral,
+      message: 'Approved by creator successfully'
+    });
+  } catch (error) {
+    console.error('approveByCreator error:', error);
+    res.status(500).json({ message: 'Failed to approve by creator', error: error.message });
+  }
+};
+
+/* APPROVE BY CHECKER - Three-stage approval */
+export const approveByChecker = async (req, res) => {
+  try {
+    const deferral = await Deferral.findById(req.params.id)
+      .populate('approvers.user', 'name email role')
+      .populate('creator', 'name email role')
+      .populate('checker', 'name email role');
+    
+    if (!deferral) {
+      return res.status(404).json({ message: 'Deferral not found' });
+    }
+
+    // Verify all approvers have approved
+    if (!deferral.allApproversApproved) {
+      return res.status(400).json({ message: 'All approvers must approve before checker approval' });
+    }
+
+    // Verify creator has approved
+    if (deferral.creatorApprovalStatus !== 'approved') {
+      return res.status(400).json({ message: 'Creator must approve before checker approval' });
+    }
+
+    // Verify user is the checker
+    if (!deferral.checker || deferral.checker._id.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: 'Only the checker can approve' });
+    }
+
+    // Update checker approval status
+    deferral.checkerApprovalStatus = 'approved';
+    deferral.checkerApprovalDate = new Date();
+    deferral.checkerApprovedBy = req.user._id;
+    
+    // Mark as fully approved
+    deferral.status = 'approved';
+
+    // Add to history
+    const approvalComment = req.body?.comment || '';
+    deferral.history = deferral.history || [];
+    deferral.history.push({
+      action: 'approved',
+      user: req.user._id,
+      userName: req.user.name,
+      notes: `Approved by Checker: ${req.user.name} - Deferral fully approved`,
+      comment: approvalComment || undefined,
+      date: new Date()
+    });
+
+    // Add to comments if comment provided
+    if (approvalComment) {
+      deferral.comments = deferral.comments || [];
+      deferral.comments.push({
+        author: req.user._id,
+        text: approvalComment,
+        createdAt: new Date()
+      });
+    }
+
+    await deferral.save();
+    await deferral.populate('approvers.user', 'name email role');
+    await deferral.populate('history.user', 'name email role');
+    await deferral.populate('comments.author', 'name email role');
+    await deferral.populate('creator', 'name email role');
+    await deferral.populate('checker', 'name email role');
+
+    res.json({
+      success: true,
+      deferral,
+      message: 'Deferral fully approved by checker'
+    });
+  } catch (error) {
+    console.error('approveByChecker error:', error);
+    res.status(500).json({ message: 'Failed to approve by checker', error: error.message });
+  }
+};
+
 /* REJECT */
 export const rejectDeferral = async (req, res) => {
   const deferral = await Deferral.findById(req.params.id);
@@ -434,7 +624,93 @@ export const rejectDeferral = async (req, res) => {
   deferral.history.push({ action: 'rejected', user: req.user._id, userName: req.user.name, notes: req.body.reason || '', date: new Date() });
 
   await deferral.save();
-  await deferral.populate("history.user", "name email");
+  await deferral.populate("history.user", "name email role");
+  await deferral.populate("comments.author", "name email role");
+
+  // Notify requestor and create an in-app notification (non-blocking)
+  (async () => {
+    try {
+      const requestorEmail = deferral.requestor && (deferral.requestor.email || (typeof deferral.requestor === 'string' ? deferral.requestor : null));
+      const requestorId = deferral.requestor && (deferral.requestor._id || deferral.requestor);
+      if (requestorEmail) {
+        const detailLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/deferrals/${deferral._id}`;
+        const rejectedListLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?next=${encodeURIComponent('/rm/deferrals/pending?active=rejected')}`;
+        const html = deferralRejectionTemplate(deferral, deferral.rejectionReason, detailLink, rejectedListLink);
+        await sendEmail({ to: requestorEmail, subject: `Deferral ${deferral.deferralNumber} rejected`, html });
+      }
+      if (requestorId) {
+        await Notification.create({ user: requestorId, message: `Your deferral ${deferral.deferralNumber} was rejected: ${deferral.rejectionReason}` });
+      }
+    } catch (err) {
+      console.error('rejectDeferral: failed to send notification', err?.message || err);
+    }
+  })();
+
+  res.json(deferral);
+};
+
+/* RETURN FOR REWORK */
+export const returnForRework = async (req, res) => {
+  const deferral = await Deferral.findById(req.params.id).populate("requestor", "email name");
+  if (!deferral) return res.status(404).json({ message: 'Not found' });
+
+  // Only current approver can return for rework
+  const i = deferral.currentApproverIndex;
+  const currentApproverId = deferral.approvers?.[i]?.user?.toString();
+  if (!currentApproverId || currentApproverId !== req.user._id.toString()) {
+    return res.status(403).json({ message: 'Only the current approver can take this action' });
+  }
+
+  deferral.status = 'returned_for_rework';
+  deferral.reworkRequestedBy = req.user.name;
+  deferral.reworkRequestedById = req.user._id;
+  deferral.reworkRequestedDate = new Date();
+  deferral.reworkComments = req.body.reworkComment || 'Please review and resubmit';
+  deferral.approverComments = req.body.approverComments || req.body.reworkComment || '';
+  deferral.history = deferral.history || [];
+  deferral.history.push({ 
+    action: 'returned_for_rework', 
+    user: req.user._id, 
+    userName: req.user.name, 
+    notes: req.body.reworkComment || 'Returned for rework', 
+    date: new Date() 
+  });
+
+  await deferral.save();
+  await deferral.populate("history.user", "name email role");
+  await deferral.populate("comments.author", "name email role");
+  (async () => {
+    try {
+      const requestorEmail = deferral.requestor?.email || (typeof deferral.requestor === 'string' ? deferral.requestor : null);
+      const requestorId = deferral.requestor?._id || deferral.requestor;
+      
+      if (requestorEmail) {
+        const detailLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/deferrals/${deferral._id}`;
+        const reworkListLink = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?next=${encodeURIComponent('/rm/deferrals/pending?active=rejected')}`;
+        
+        // Simple email notification for return for rework
+        const html = `
+          <h2>Deferral Returned for Rework</h2>
+          <p>Your deferral request <strong>${deferral.deferralNumber}</strong> has been returned for rework.</p>
+          <p><strong>Reason:</strong> ${req.body.reworkComment || 'Please review and make necessary corrections.'}</p>
+          <p><a href="${detailLink}">View Deferral Details</a></p>
+          <p><a href="${reworkListLink}">View All Rework Items</a></p>
+        `;
+        
+        await sendEmail({ to: requestorEmail, subject: `Deferral ${deferral.deferralNumber} returned for rework`, html });
+      }
+      
+      if (requestorId) {
+        await Notification.create({ 
+          user: requestorId, 
+          message: `Your deferral ${deferral.deferralNumber} has been returned for rework: ${req.body.reworkComment || 'Please review and resubmit'}` 
+        });
+      }
+    } catch (err) {
+      console.error('returnForRework: failed to send notification', err?.message || err);
+    }
+  })();
+
   res.json(deferral);
 };
 
@@ -452,14 +728,14 @@ export const addComment = async (req, res) => {
   deferral.comments.push(comment);
   await deferral.save();
 
-  await deferral.populate("comments.author", "name email");
+  await deferral.populate("comments.author", "name email role");
   res.status(201).json(deferral.comments[deferral.comments.length - 1]);
 };
 
 export const getComments = async (req, res) => {
   const deferral = await Deferral.findById(req.params.id).populate(
     "comments.author",
-    "name email"
+    "name email role"
   );
   if (!deferral) return res.status(404).json({ message: "Not found" });
   res.json(deferral.comments);
@@ -470,8 +746,14 @@ export const getMyDeferrals = async (req, res) => {
   const data = await Deferral.find({ requestor: req.user._id })
     .sort("-createdAt")
     .populate("customer", "name customerNumber")
-    .populate("approvers.user", "name email");
-  res.json(data);
+    .populate("approvers.user", "name email")
+    .populate("comments.author", "name email role")
+    .populate("creator", "name email role")
+    .populate("checker", "name email role");
+  
+  // Ensure approval fields are set on all deferrals
+  const enrichedData = data.map(d => ensureApprovalFields(d));
+  res.json(enrichedData);
 };
 
 /* GET APPROVED DEFERRALS (for CO dashboard) */
@@ -482,13 +764,53 @@ export const getApprovedDeferrals = async (req, res) => {
       .populate('customer', 'name customerNumber')
       .populate('requestor', 'name email')
       .populate('approvers.user', 'name email position')
-      .populate('history.user', 'name email');
+      .populate('history.user', 'name email role')
+      .populate('comments.author', 'name email role')
+      .populate('creator', 'name email role')
+      .populate('checker', 'name email role');
 
-    console.info('getApprovedDeferrals returned', { count: data.length, ids: data.map(d => d.deferralNumber) });
-    res.json(data);
+    // Ensure approval fields are set on all deferrals
+    const enrichedData = data.map(d => ensureApprovalFields(d));
+    
+    console.info('getApprovedDeferrals returned', { count: enrichedData.length, ids: enrichedData.map(d => d.deferralNumber) });
+    res.json(enrichedData);
   } catch (err) {
     console.error('ERROR getApprovedDeferrals failed', err && err.stack ? err.stack : err);
     res.status(500).json({ message: 'Failed to fetch approved deferrals', error: err?.message || String(err) });
+  }
+};
+
+/* SEND REMINDER to current approver (triggered by RM) */
+export const sendReminder = async (req, res) => {
+  try {
+    const deferral = await Deferral.findById(req.params.id).populate('requestor', 'name email');
+    if (!deferral) return res.status(404).json({ message: 'Not found' });
+
+    // determine current approver (currentApprover or first in approverFlow)
+    const current = deferral.currentApprover || (deferral.approverFlow && deferral.approverFlow[0]) || null;
+    let email = null;
+    let name = null;
+    if (current) {
+      email = current.email || (current.user && current.user.email) || (typeof current === 'string' && current.includes('@') ? current : null);
+      name = current.name || (current.user && current.user.name) || (typeof current === 'string' ? current.split('@')[0] : null);
+    }
+
+    if (!email) return res.status(400).json({ message: 'No email available for current approver' });
+
+    const target = `/approver?deferralId=${deferral._id}`;
+    const link = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login?next=${encodeURIComponent(target)}`;
+    const html = deferralReminderTemplate(deferral, name || email.split('@')[0], link);
+
+    await sendEmail({ to: email, subject: `Reminder: Deferral ${deferral.deferralNumber} awaiting your approval`, html });
+
+    deferral.history = deferral.history || [];
+    deferral.history.push({ user: req.user._id, action: 'reminder', date: new Date(), comment: `Reminder sent to ${email}` });
+    await deferral.save();
+
+    res.json({ success: true, email });
+  } catch (err) {
+    console.error('sendReminder error', err && err.stack ? err.stack : err);
+    res.status(500).json({ success: false, error: err?.message || String(err) });
   }
 };
 /* GET NEXT DEFERAL NUMBER (preview) */
