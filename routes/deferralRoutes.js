@@ -6,7 +6,7 @@ import {
   getActionedDeferrals,
   getMyDeferrals,
   getDeferral,
-  addComment,
+  postComment,
   getComments,
   updateFacilities,
   addDocument,
@@ -26,6 +26,7 @@ import {
   debugGetDocumentsByNumber,
   debugSearchByDocumentName,  debugCreateApproved,  uploadDocument, sendReminder
 } from "../controllers/deferralController.js";
+import { searchByDcl } from "../controllers/customerController.js";
 import { protect } from "../middleware/authMiddleware.js";
 import { authorizeRoles } from "../middleware/roleMiddleware.js";
 
@@ -38,6 +39,7 @@ router.get("/approver/actioned", protect, getActionedDeferrals);
 router.get("/my", protect, getMyDeferrals);
 router.get("/preview-number", getNextDeferralNumber);
 router.get("/approved", protect, getApprovedDeferrals);
+router.get("/search-by-dcl", protect, searchByDcl);
 router.get("/:id", protect, getDeferral);
 
 // DEBUG: Temporary route to get by deferral number (for troubleshooting only)
@@ -58,7 +60,7 @@ router.post("/debug/force-approved", debugCreateApproved);
 router.get("/debug/public/approved", getApprovedDeferrals);
 
 // Comments
-router.post("/:id/comments", protect, addComment);
+router.post("/:id/comments", protect, postComment);
 router.get("/:id/comments", protect, getComments);
 
 router.put("/:id/facilities", protect, updateFacilities);

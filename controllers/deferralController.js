@@ -479,9 +479,14 @@ export const approveByCreator = async (req, res) => {
       return res.status(400).json({ message: 'All approvers must approve before creator approval' });
     }
 
-    // Verify user is the creator
-    if (!deferral.creator || deferral.creator._id.toString() !== req.user._id.toString()) {
+    // Verify user is the creator or set them as creator if not already set
+    if (deferral.creator && deferral.creator._id.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Only the creator can approve' });
+    }
+
+    // If no creator is set, set the current user as the creator
+    if (!deferral.creator) {
+      deferral.creator = req.user._id;
     }
 
     // Update creator approval status
@@ -496,7 +501,7 @@ export const approveByCreator = async (req, res) => {
       action: 'approved',
       user: req.user._id,
       userName: req.user.name,
-      notes: `Approved by Creator: ${req.user.name}`,
+      notes: `Approved by Creator: ${req.user.name}${approvalComment ? ' - ' + approvalComment : ''}`,
       comment: approvalComment || undefined,
       date: new Date()
     });
@@ -551,9 +556,12 @@ export const approveByChecker = async (req, res) => {
       return res.status(400).json({ message: 'Creator must approve before checker approval' });
     }
 
-    // Verify user is the checker
-    if (!deferral.checker || deferral.checker._id.toString() !== req.user._id.toString()) {
+    // Verify user is the checker (or auto-assign if not set)
+    if (deferral.checker && deferral.checker._id.toString() !== req.user._id.toString()) {
       return res.status(403).json({ message: 'Only the checker can approve' });
+    }
+    if (!deferral.checker) {
+      deferral.checker = req.user._id;
     }
 
     // Update checker approval status
@@ -571,7 +579,7 @@ export const approveByChecker = async (req, res) => {
       action: 'approved',
       user: req.user._id,
       userName: req.user.name,
-      notes: `Approved by Checker: ${req.user.name} - Deferral fully approved`,
+      notes: `Approved by Checker: ${req.user.name}${approvalComment ? ' - ' + approvalComment : ''} - Deferral fully approved`,
       comment: approvalComment || undefined,
       date: new Date()
     });
@@ -965,6 +973,59 @@ export const generatePDF = async (req, res) => {
   });
 
   doc.end();
+};
+
+/* POST COMMENT */
+export const postComment = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text, author } = req.body;
+
+    if (!id) {
+      return res.status(400).json({ message: "Deferral ID is required" });
+    }
+
+    if (!text || !text.trim()) {
+      return res.status(400).json({ message: "Comment text is required" });
+    }
+
+    // Find the deferral
+    const deferral = await Deferral.findById(id);
+    if (!deferral) {
+      return res.status(404).json({ message: "Deferral not found" });
+    }
+
+    // Initialize comments array if it doesn't exist
+    if (!Array.isArray(deferral.comments)) {
+      deferral.comments = [];
+    }
+
+    // Create the comment object
+    const newComment = {
+      text: text.trim(),
+      author: {
+        name: author?.name || req.user?.name || 'User',
+        role: author?.role || req.user?.role || 'user',
+        id: req.user?._id
+      },
+      createdAt: new Date()
+    };
+
+    // Add to comments array
+    deferral.comments.push(newComment);
+
+    // Save the deferral
+    await deferral.save();
+
+    res.json({
+      success: true,
+      message: 'Comment posted successfully',
+      deferral: deferral
+    });
+  } catch (error) {
+    console.error('Error posting comment:', error);
+    res.status(500).json({ message: error.message || 'Failed to post comment' });
+  }
 };
 
 // DEBUG: Create an approved deferral (development only)
