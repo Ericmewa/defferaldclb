@@ -53,6 +53,8 @@ export const createDeferral = async (req, res) => {
     ...req.body,
     deferralNumber, // authoritative server-generated number
     requestor: req.user._id,
+    // If the creator is an RM, assign them as the RM managing this deferral
+    assignedRM: req.body.assignedRM || req.user._id,
   };
 
   // Normalize any documents included at creation time so uploaded metadata is consistent
@@ -150,6 +152,7 @@ export const getPendingDeferrals = async (_, res) => {
     .sort("-createdAt")
     .populate("customer", "name customerNumber")
     .populate("requestor", "name email")
+    .populate("assignedRM", "name email")
     .populate("comments.author", "name email role")
     .populate("creator", "name email role")
     .populate("checker", "name email role");
@@ -214,6 +217,7 @@ export const getDeferral = async (req, res) => {
   const deferral = await Deferral.findById(req.params.id)
     .populate("customer", "name customerNumber email customerId")
     .populate("requestor", "name email role")
+    .populate("assignedRM", "name email role")
     .populate("approvers.user", "name email position role")
     .populate("history.user", "name email role")
     .populate("comments.author", "name email role")
@@ -722,24 +726,6 @@ export const returnForRework = async (req, res) => {
   res.json(deferral);
 };
 
-/* COMMENTS */
-export const addComment = async (req, res) => {
-  const deferral = await Deferral.findById(req.params.id);
-  if (!deferral) return res.status(404).json({ message: "Not found" });
-
-  const comment = {
-    author: req.user._id,
-    text: req.body.text,
-    createdAt: new Date(),
-  };
-
-  deferral.comments.push(comment);
-  await deferral.save();
-
-  await deferral.populate("comments.author", "name email role");
-  res.status(201).json(deferral.comments[deferral.comments.length - 1]);
-};
-
 export const getComments = async (req, res) => {
   const deferral = await Deferral.findById(req.params.id).populate(
     "comments.author",
@@ -751,7 +737,14 @@ export const getComments = async (req, res) => {
 
 /* MY DEFERRALS */
 export const getMyDeferrals = async (req, res) => {
-  const data = await Deferral.find({ requestor: req.user._id })
+  // Return deferrals where the current user is either the requestor or the assigned RM
+  // This ensures RMs see all deferrals they created or are assigned to manage
+  const data = await Deferral.find({ 
+    $or: [
+      { requestor: req.user._id },      // Deferrals created by this user
+      { assignedRM: req.user._id }      // Deferrals assigned to this user as RM
+    ]
+  })
     .sort("-createdAt")
     .populate("customer", "name customerNumber")
     .populate("approvers.user", "name email")
@@ -771,6 +764,7 @@ export const getApprovedDeferrals = async (req, res) => {
       .sort('-createdAt')
       .populate('customer', 'name customerNumber')
       .populate('requestor', 'name email')
+      .populate('assignedRM', 'name email')
       .populate('approvers.user', 'name email position')
       .populate('history.user', 'name email role')
       .populate('comments.author', 'name email role')
@@ -1002,12 +996,8 @@ export const postComment = async (req, res) => {
 
     // Create the comment object
     const newComment = {
+      author: req.user?._id,
       text: text.trim(),
-      author: {
-        name: author?.name || req.user?.name || 'User',
-        role: author?.role || req.user?.role || 'user',
-        id: req.user?._id
-      },
       createdAt: new Date()
     };
 
@@ -1017,10 +1007,13 @@ export const postComment = async (req, res) => {
     // Save the deferral
     await deferral.save();
 
+    // Populate the author information before returning
+    const populatedDeferral = await Deferral.findById(deferral._id).populate('comments.author', 'name role');
+
     res.json({
       success: true,
       message: 'Comment posted successfully',
-      deferral: deferral
+      deferral: populatedDeferral
     });
   } catch (error) {
     console.error('Error posting comment:', error);
